@@ -1,17 +1,9 @@
-#include <ThingerCC3000.h>
-#include <ThingerClient.h>
-#include <ThingerENC28J60.h>
-#include <ThingerESP32.h>
-#include <ThingerESP8266.h>
-#include <ThingerESP8266AT.h>
-#include <ThingerEthernet.h>
-#include <ThingerLinkItOneGPRS.h>
-#include <ThingerLinkItOneWifi.h>
-#include <ThingerSmartConfig.h>
-#include <ThingerTinyGSM.h>
-#include <ThingerWebConfig.h>
-#include <ThingerWifi.h>
-#include <ThingerWifi101.h>
+#define _DEBUG_
+
+    #include <SPI.h>
+    #include <RH_RF95.h>
+    #include <ESP8266WiFi.h>
+    #include <ThingerWifi.h>
 
 
     #define RFM95_CS  2    // "E"
@@ -19,32 +11,79 @@
     #define RFM95_INT 15   // "B"
     // Change to 434.0 or other frequency, must match RX's freq!
     #define RF95_FREQ 434.0
-   
-    #include <SPI.h>
-    #include <RH_RF95.h>
-    #include <ESP8266WiFi.h>
 
+    
+    #define USERNAME "samograsic"
+    #define DEVICE_ID "Gateway433MHz"
+    #define DEVICE_CREDENTIAL "dc6Lqdzlb6Sa"
+    #define SSID "OptNet"
+    #define SSID_PASSWORD "krat11jekrat11je"
+   
     RH_RF95 rf95(RFM95_CS, RFM95_INT);
     int16_t packetnum = 0;  // packet counter, we increment per xmission
+    ThingerWifi thing(USERNAME, DEVICE_ID, DEVICE_CREDENTIAL);
+
+    int value = 0;
 
 
-    ThingerWifi thing("username", "deviceId", "deviceCredential");
+void loop() 
+{
+  Serial.println("Calling Nodes..."); // Send a message to rf95_server
+  char radioBeacon[] = {0xFF,0xFF,0xFF,0xFE};
+         unsigned long StartTime = millis();
+         rf95.send((uint8_t *)radioBeacon,4);
+         rf95.waitPacketSent();
+         unsigned long StopTime = millis();
+                  StartTime = millis();
+         Serial.println("Sending call, needed time:");
+         Serial.println(StopTime-StartTime,DEC);
 
-void setup() {
-  thing.add_wifi("wifi_ssid", "wifi_credentials");
+         while(rf95.available()==false)
+         {
+            //We wait for response
+            yield();
+         }
+         StopTime = millis();
+         uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
+         uint8_t len = sizeof(buf);
+         rf95.recv(buf, &len);
+         Serial.println("Received response, needed time:");
+         Serial.println(StopTime-StartTime,DEC);
+
+          delay(5000);
+
+/*  //MQTT Stuff
+  Serial.println("Handling THING.IO..."); // Send a message to rf95_server
+  thing.handle();
+  yield();
+
+
+      delay(5000);
+      ++value;
+
+  
+  char radiopacket[20] = "Hello World #      ";
+  itoa(packetnum++, radiopacket+13, 10);
+  Serial.print("Sending "); Serial.println(radiopacket);
+  radiopacket[19] = 0;
+  
+  Serial.println("LORA Sending..."); delay(10);
+  rf95.send((uint8_t *)radiopacket, 20);
+ 
+  Serial.println("LORA Waiting for packet to complete..."); delay(10);
+  rf95.waitPacketSent();
+int out;
+thing["LORA-MSG"] >> [](pson& out){
+      out = 100;
+};
+*/
 }
 
-void loop() {
-  thing.handle();
-}     
-    const char* ssid     = "Heimlauta4G";
-    const char* password = "thelia1216";
-     
-    const char* host = "wifitest.adafruit.com";
-     
-    void setup() {
+void setup() 
+{
+      //Init LORA
       Serial.begin(115200);
-      delay(100);
+      delay(100); 
       // LORA Radio Init
       pinMode(RFM95_RST, OUTPUT);
       digitalWrite(RFM95_RST, HIGH);
@@ -61,7 +100,7 @@ void loop() {
         yield();
       }
       Serial.println("LoRa radio init OK!");
-     
+ 
       // Defaults after init are 434.0MHz, modulation GFSK_Rb250Fd250, +13dbM
       if (!rf95.setFrequency(RF95_FREQ)) {
         Serial.println("setFrequency failed");
@@ -75,73 +114,6 @@ void loop() {
       rf95.setTxPower(23, false);
      
       // We start by connecting to a WiFi network
-     
-      Serial.println();
-      Serial.println();
-      Serial.print("Connecting to ");
-      Serial.println(ssid);
-      
-      WiFi.begin(ssid, password);
-      
-      while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-      }
-     
-      Serial.println("");
-      Serial.println("WiFi connected");  
-      Serial.println("IP address: ");
-      Serial.println(WiFi.localIP());
-    }
-     
-    int value = 0;
-     
-    void loop() {
-      delay(5000);
-      ++value;
-
-  Serial.println("LORA Transmitting..."); // Send a message to rf95_server
-  
-  char radiopacket[20] = "Hello World #      ";
-  itoa(packetnum++, radiopacket+13, 10);
-  Serial.print("Sending "); Serial.println(radiopacket);
-  radiopacket[19] = 0;
-  
-  Serial.println("LORA Sending..."); delay(10);
-  rf95.send((uint8_t *)radiopacket, 20);
- 
-  Serial.println("LORA Waiting for packet to complete..."); delay(10);
-  rf95.waitPacketSent();
-  
-     
-      Serial.print("connecting to ");
-      Serial.println(host);
-      
-      // Use WiFiClient class to create TCP connections
-      WiFiClient client;
-      const int httpPort = 80;
-      if (!client.connect(host, httpPort)) {
-        Serial.println("connection failed");
-        return;
-      }
-      
-      // We now create a URI for the request
-/*      String url = "/testwifi/index.html";
-      Serial.print("Requesting URL: ");
-      Serial.println(url);
-      
-      // This will send the request to the server
- //     client.print(String("GET ") + url + " HTTP/1.1\r\n" +
-                   "Host: " + host + "\r\n" + 
-                   "Connection: close\r\n\r\n");
-      delay(500);
-      
-      // Read all the lines of the reply from server and print them to Serial
-      while(client.available()){
-        String line = client.readStringUntil('\r');
-        Serial.print(line);
-      }
- */     
-      Serial.println();
-      Serial.println("closing connection");
-    }
+      thing.add_wifi(SSID, SSID_PASSWORD);
+    
+}
