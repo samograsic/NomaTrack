@@ -2,11 +2,16 @@
 #include <SPI.h>
 #include <RH_RF95.h>
 
-#define NODEID 1
+#define NODEID 0x0001
 
 #define RFM95_CS 8
 #define RFM95_RST 4
 #define RFM95_INT 3
+
+#define MINDELAY 100
+#define MAXDELAY 1000
+#define RESPONSETIMEOUT 10000
+#define RADIOTIMESLOT 2000
 
 #define GPSSerial Serial1
 
@@ -15,6 +20,22 @@
   #define RFM95_CS      10   // "B"
   #define RFM95_INT     6    // "D"
 */
+
+
+struct GPSRecord
+{
+  uint32_t nodeId;
+  uint8_t hour, minute, seconds, year, month, day;
+  float speed;
+  float latitudeDegrees, longitudeDegrees;
+  float altitude;
+  float temperature;
+  uint8_t satellites;
+  float RSSI;
+};
+
+GPSRecord lastGPSRecord;
+//lastGPSRecord.nodeId=1;
 
 // Change to 434.0 or other frequency, must match RX's freq!
 #define RF95_FREQ 434.0
@@ -33,50 +54,54 @@ Adafruit_GPS GPS(&GPSSerial);
 #define GPSECHO false
 
 uint32_t timer = millis();
-
-
-
+uint8_t writeGPSRecordToString( GPSRecord & value, uint8_t  *str)
+  {
+    uint8_t *p = ( uint8_t*) &value;
+    //const uint8_t *strPtr=
+    unsigned int i;
+    *str=0x04;
+    str++;
+    for (i = 0; i < sizeof value; i++)
+    {      
+      *str = (*p++); 
+      str++; 
+    }
+    return i+1;
+}
+ 
 void setup()
 {
   //LORA Init
   pinMode(LED, OUTPUT);
   pinMode(RFM95_RST, OUTPUT);
   digitalWrite(RFM95_RST, HIGH);
-
   while (!Serial);
   Serial.begin(115200);
   delay(100);
-
   Serial.println("Feather LoRa RX Test!");
-
   // manual reset
   digitalWrite(RFM95_RST, LOW);
   delay(10);
   digitalWrite(RFM95_RST, HIGH);
   delay(10);
-
   while (!rf95.init()) {
     Serial.println("LoRa radio init failed");
     while (1);
   }
   Serial.println("LoRa radio init OK!");
-
   // Defaults after init are 434.0MHz, modulation GFSK_Rb250Fd250, +13dbM
   if (!rf95.setFrequency(RF95_FREQ)) {
     Serial.println("setFrequency failed");
     while (1);
   }
   Serial.print("Set Freq to: "); Serial.println(RF95_FREQ);
-
   // Defaults after init are 434.0MHz, 13dBm, Bw = 125 kHz, Cr = 4/5, Sf = 128chips/symbol, CRC on
-
   // The default transmitter power is 13dBm, using PA_BOOST.
   // If you are using RFM95/96/97/98 modules which uses the PA_BOOST transmitter pin, then
   // you can set transmitter powers from 5 to 23 dBm:
   rf95.setTxPower(23, false);
 
   //GPS Init
-
   // 9600 NMEA is the default baud rate for Adafruit MTK GPS's- some use 4800
   GPS.begin(9600);
   // uncomment this line to turn on RMC (recommended minimum) and GGA (fix data) including altitude
@@ -89,12 +114,9 @@ void setup()
   GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ); // 1 Hz update rate
   // For the parsing code to work nicely and have time to sort thru the data, and
   // print it out we don't suggest using anything higher than 1 Hz
-
   // Request updates on antenna status, comment out to keep quiet
   GPS.sendCommand(PGCMD_ANTENNA);
-
   delay(1000);
-
   // Ask for firmware version
   GPSSerial.println(PMTK_Q_RELEASE);
 }
@@ -104,7 +126,7 @@ void loop()
   while(rf95.available()==false)
   {
     //We wait for a radio call
-    readGPS();
+   // readGPS();
   }
   //After we check if it a valid radio all
   //LORA Stuff
@@ -121,17 +143,67 @@ void loop()
       Serial.print(rf95.lastRssi(), DEC); Serial.print(" ");
       Serial.print(rssiToPercentage(rf95.lastRssi()), DEC); Serial.println("%");
       //Checking if it is a right call
-      if((buf[0]==0xFF)&&(buf[1]==0xFF)&&(buf[2]==0xFF)&&(buf[3]==0xFE))
+      if((buf[0]==0x01)&&(buf[1]==0xFF)&&(buf[2]==0xFF)&&(buf[3]==0xFF)&&(buf[4]==0xFE))
       {
         //Than we anwser with our id
-         uint8_t data[] = "0x0001";
-         unsigned long StartTime = millis();
+         lastGPSRecord.RSSI=rf95.lastRssi();
+         uint8_t data[] = {0x02,0x00,0x00,0x00,0x01};
+         unsigned long startTime = millis();
+         //while(rf95.isChannelActive()==true)
+         delay(random(MINDELAY, MAXDELAY));
          rf95.send(data, sizeof(data));
          rf95.waitPacketSent();
-         unsigned long StopTime = millis();
-         Serial.println("Responded to call!");
-         Serial.println(StopTime-StartTime,DEC);
-         digitalWrite(LED, LOW);
+         startTime = millis();
+         Serial.println("Responded to call, waiting for request...");
+         while((millis()-startTime)<RESPONSETIMEOUT)
+         {
+              if(rf95.available()==true)
+              {
+                //Process response
+                uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
+                uint8_t len = sizeof(buf);
+                // Serial.println(len,DEC);
+                rf95.recv(buf, &len);
+                RH_RF95::printBuffer("Received request response: ", buf, len);
+                if(buf[0]==0x03) //expected instant data response type //0x03
+                {
+                    Serial.println("Processing instat data response...");
+                    uint8_t numberOfNodes=buf[1];
+                    uint8_t index=0;
+                    Serial.println("Searching our time slot...");
+                    uint8_t timeSlotIndex=255;
+                    while((index<numberOfNodes)&&(timeSlotIndex==255))
+                    {
+                      uint32_t parsedId;
+                      parsedId=buf[index+2]+(buf[index+3]*0xF)+(buf[index+4]*0xFF)+(buf[index+5]*0xFFF);
+                      if(parsedId==NODEID)
+                        timeSlotIndex=index/4;
+                      index=index+4; 
+                    }
+                    if(timeSlotIndex!=255)
+                    {
+                      Serial.print("OurTimeSlot:");Serial.println(timeSlotIndex,DEC);
+                      Serial.println("Waiting for my time...");
+                      readGPS();
+                      delay(timeSlotIndex*RADIOTIMESLOT);
+                      //send current GPS record
+                      uint8_t GPSData[RH_RF95_MAX_MESSAGE_LEN];
+                      uint8_t size=writeGPSRecordToString(lastGPSRecord,GPSData);
+                      rf95.send(GPSData,size);
+                      rf95.waitPacketSent();
+                      Serial.println("Instant GPS Data Sent...");
+
+
+
+                      
+                    }
+                    else
+                    {
+                      Serial.print("No time slot for me...");
+                    }
+                }
+            }
+        }
       }
       else
       {
@@ -186,6 +258,18 @@ void readGPS()
       Serial.print("Altitude: "); Serial.println(GPS.altitude);
       Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
     }
+  //Fill in lastGPSRecord
+  lastGPSRecord.hour=GPS.hour;
+  lastGPSRecord.minute=GPS.minute;
+  lastGPSRecord.seconds=GPS.seconds;
+  lastGPSRecord.year=GPS.year;
+  lastGPSRecord.month=GPS.month;
+  lastGPSRecord.day=GPS.day;
+  lastGPSRecord.speed=GPS.speed;
+  lastGPSRecord.latitudeDegrees=GPS.lat;
+  lastGPSRecord.longitudeDegrees=GPS.lon;
+  lastGPSRecord.altitude=GPS.altitude;
+  lastGPSRecord.satellites=GPS.satellites;
   }
 }
 

@@ -11,7 +11,8 @@
     #define RFM95_INT 15   // "B"
     // Change to 434.0 or other frequency, must match RX's freq!
     #define RF95_FREQ 434.0
-
+    #define CALLTIMEOUT 10000 //10 SEC call timeout
+    #define MAXNROFNODES 60
     
     #define USERNAME "samograsic"
     #define DEVICE_ID "Gateway433MHz"
@@ -25,32 +26,105 @@
 
     int value = 0;
 
+struct NodeData
+{
+  uint32_t nodeId;
+  float RSSI;
+};
+
+struct GPSRecord
+{
+  uint32_t nodeId;
+  uint8_t hour, minute, seconds, year, month, day;
+  float speed;
+  float latitudeDegrees, longitudeDegrees;
+  float altitude;
+  float temperature;
+  uint8_t satellites;
+  float RSSI;
+};
 
 void loop() 
 {
-  Serial.println("Calling Nodes..."); // Send a message to rf95_server
-  char radioBeacon[] = {0xFF,0xFF,0xFF,0xFE};
-         unsigned long StartTime = millis();
-         rf95.send((uint8_t *)radioBeacon,4);
-         rf95.waitPacketSent();
-         unsigned long StopTime = millis();
-                  StartTime = millis();
-         Serial.println("Sending call, needed time:");
-         Serial.println(StopTime-StartTime,DEC);
+  uint16_t numberOfNodes = 0;
+  NodeData nodeData[MAXNROFNODES];
+  Serial.println("Preparing to call Nodes..."); // Send a message to rf95_server
+  char radioBeacon[] = {0x01,0xFF,0xFF,0xFF,0xFE}; //0x01 Beacon Type, rest is address
+  rf95.init();
+  //while(rf95.isChannelActive()==true)
+  //  yield();
+  rf95.send((uint8_t *)radioBeacon,5);
+  rf95.waitPacketSent();
+  unsigned long startTime = millis();
+  Serial.println("Sending call, waiting for clients...");
+  while(((numberOfNodes<MAXNROFNODES)&&((millis()-startTime)<CALLTIMEOUT)))
+  {
+    if(rf95.available()==true)
+    {
+      //Process response
+      uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
+      uint8_t len = sizeof(buf);
+     // Serial.println(len,DEC);
+      rf95.recv(buf, &len);
+      RH_RF95::printBuffer("Received: ", buf, len);
+      Serial.println("Received response...");
+      if(buf[0]==0x02) //expected response type //0x02
+      {
+        Serial.println("Processing response...");
+        nodeData[numberOfNodes].nodeId=buf[4]+(buf[3]*0xFF)+(buf[2]*0xFFFF)+(buf[1]*0xFFFFFF);
+        Serial.print("Added node ID:");Serial.println(nodeData[numberOfNodes].nodeId,DEC);
+        numberOfNodes++;
+      }
+      else
+      {
+        Serial.println("Wrong response!");
+      }     
+    }
+    yield();
+   }
+   if(numberOfNodes>0)
+   {
+     Serial.println("Makin request list of nodes..");
+     //Send request to nodes for instant data
+     uint8_t instantRequest[RH_RF95_MAX_MESSAGE_LEN];
+     instantRequest[0]=0x03;//0x03 Instant Request Type 
+     instantRequest[1]=numberOfNodes;
+     uint8_t index=0;
+     while(index<numberOfNodes)
+     {
+      instantRequest[index+2]=(uint8_t)(nodeData[index].nodeId)%0xFFF;
+      instantRequest[index+3]=(uint8_t)(nodeData[index].nodeId/0xFFF)%0xFF;
+      instantRequest[index+4]=(uint8_t)(nodeData[index].nodeId/0xFF)%0xF;
+      instantRequest[index+5]=(uint8_t)(nodeData[index].nodeId/0xF);
+      index=index+4;
+     }
+     rf95.send((uint8_t *)instantRequest,index+1);
+     yield();
+     rf95.waitPacketSent();
+     startTime = millis();
+     Serial.println("Request to nodes sent, waiting for data...");
+     while(((millis()-startTime)<CALLTIMEOUT))
+     {
+        if(rf95.available()==true)
+        {
+          uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
+          uint8_t len = sizeof(buf);
+          rf95.recv(buf, &len);
+          RH_RF95::printBuffer("Received data: ", buf, len);
+          Serial.println("Received GPS data!!!");
+          startTime = millis();
+        }
+        yield();
+     }
+     Serial.println("End of waiting for data...");
+   }
+   else
+    Serial.println("No node responded!");
+       //  StopTime = millis();
+       //  Serial.println("Received response, needed time:");
+       //  Serial.println(StopTime-StartTime,DEC);
 
-         while(rf95.available()==false)
-         {
-            //We wait for response
-            yield();
-         }
-         StopTime = millis();
-         uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
-         uint8_t len = sizeof(buf);
-         rf95.recv(buf, &len);
-         Serial.println("Received response, needed time:");
-         Serial.println(StopTime-StartTime,DEC);
-
-          delay(5000);
+        //  delay(5000);
 
 /*  //MQTT Stuff
   Serial.println("Handling THING.IO..."); // Send a message to rf95_server
