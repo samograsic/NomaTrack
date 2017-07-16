@@ -13,6 +13,13 @@
 #define RESPONSETIMEOUT 10000
 #define RADIOTIMESLOT 2000
 
+//Protocol State Machine
+#define WAIT 0
+#define INDENTIFY 1
+#define DATA 2
+
+uint_u protocolState=0;
+
 #define GPSSerial Serial1
 
 /* Feather m0 w/wing
@@ -68,6 +75,113 @@ uint8_t writeGPSRecordToString( GPSRecord & value, uint8_t  *str)
     }
     return i+1;
 }
+
+void receivePacket
+{
+  
+  }
+
+//Protocol state machine
+void execProtocol
+{
+  
+}
+
+void loop()
+{
+  while(rf95.available()==false)
+  {
+    //We wait for a radio call
+    readGPS();
+  }
+  //After we check if it a valid radio all
+  //LORA Stuff
+  uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
+  uint8_t len = sizeof(buf);
+  if (rf95.recv(buf, &len))
+  {
+      //Debug
+      digitalWrite(LED, HIGH);
+      RH_RF95::printBuffer("Received: ", buf, len);
+      Serial.print("Got: ");
+      Serial.println((char*)buf);
+      Serial.print("RSSI: ");
+      Serial.print(rf95.lastRssi(), DEC); Serial.print(" ");
+     // Serial.print(rssiToPercentage(rf95.lastRssi()), DEC); Serial.println("%");
+      //Checking if it is a right call
+      if((buf[0]==0x01)&&(buf[1]==0xFF)&&(buf[2]==0xFF)&&(buf[3]==0xFF)&&(buf[4]==0xFE))
+      {
+        //Than we anwser with our id
+         lastGPSRecord.RSSI=rf95.lastRssi();
+         uint8_t data[] = {0x02,0x00,0x00,0x00,0x01};
+         unsigned long startTime = millis();
+         //while(rf95.isChannelActive()==true)
+         delay(random(MINDELAY, MAXDELAY));
+         rf95.send(data, sizeof(data));
+         rf95.waitPacketSent();
+         startTime = millis();
+         Serial.println("Responded to call, waiting for request...");
+         while((millis()-startTime)<RESPONSETIMEOUT)
+         {
+              if(rf95.available()==true)
+              {
+                //Process response
+                uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
+                uint8_t len = sizeof(buf);
+                // Serial.println(len,DEC);
+                rf95.recv(buf, &len);
+                RH_RF95::printBuffer("Received request response: ", buf, len);
+                if(buf[0]==0x03) //expected instant data response type //0x03
+                {
+                    Serial.println("Processing instat data response...");
+                    uint8_t numberOfNodes=buf[1];
+                    uint8_t index=0;
+                    Serial.println("Searching our time slot...");
+                    uint8_t timeSlotIndex=255;
+                    while((index<numberOfNodes)&&(timeSlotIndex==255))
+                    {
+                      uint32_t parsedId;
+                      parsedId=buf[index+2]+(buf[index+3]*0xF)+(buf[index+4]*0xFF)+(buf[index+5]*0xFFF);
+                      if(parsedId==NODEID)
+                        timeSlotIndex=index/4;
+                      index=index+4; 
+                    }
+                    if(timeSlotIndex!=255)
+                    {
+                      Serial.print("OurTimeSlot:");Serial.println(timeSlotIndex,DEC);
+                      Serial.println("Waiting for my time...");
+                      readGPS();
+                      delay(timeSlotIndex*RADIOTIMESLOT);
+                      //send current GPS record
+                      uint8_t GPSData[RH_RF95_MAX_MESSAGE_LEN];
+                      uint8_t size=writeGPSRecordToString(lastGPSRecord,GPSData);
+                      rf95.send(GPSData,size);
+                       Serial.print("Size:"); Serial.println(size,DEC);
+                      //Buffer printOut
+
+                      printPacket(GPSData);                      
+                      
+                      rf95.waitPacketSent();
+                      Serial.println("Instant GPS Data Sent...");
+
+
+
+                      
+                    }
+                    else
+                    {
+                      Serial.print("No time slot for me...");
+                    }
+                }
+            }
+        }
+      }
+      else
+      {
+        Serial.println("Not call for us!");
+      }
+  }
+}
  
 void setup()
 {
@@ -121,97 +235,14 @@ void setup()
   GPSSerial.println(PMTK_Q_RELEASE);
 }
 
-void loop()
+
+void printPacket(uint8_t *ptr)
 {
-  while(rf95.available()==false)
+  for(uint8_t i=0;i<RH_RF95_MAX_MESSAGE_LEN; i++)
   {
-    //We wait for a radio call
-   // readGPS();
-  }
-  //After we check if it a valid radio all
-  //LORA Stuff
-  uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
-  uint8_t len = sizeof(buf);
-  if (rf95.recv(buf, &len))
-  {
-      //Debug
-      digitalWrite(LED, HIGH);
-      RH_RF95::printBuffer("Received: ", buf, len);
-      Serial.print("Got: ");
-      Serial.println((char*)buf);
-      Serial.print("RSSI: ");
-      Serial.print(rf95.lastRssi(), DEC); Serial.print(" ");
-      Serial.print(rssiToPercentage(rf95.lastRssi()), DEC); Serial.println("%");
-      //Checking if it is a right call
-      if((buf[0]==0x01)&&(buf[1]==0xFF)&&(buf[2]==0xFF)&&(buf[3]==0xFF)&&(buf[4]==0xFE))
-      {
-        //Than we anwser with our id
-         lastGPSRecord.RSSI=rf95.lastRssi();
-         uint8_t data[] = {0x02,0x00,0x00,0x00,0x01};
-         unsigned long startTime = millis();
-         //while(rf95.isChannelActive()==true)
-         delay(random(MINDELAY, MAXDELAY));
-         rf95.send(data, sizeof(data));
-         rf95.waitPacketSent();
-         startTime = millis();
-         Serial.println("Responded to call, waiting for request...");
-         while((millis()-startTime)<RESPONSETIMEOUT)
-         {
-              if(rf95.available()==true)
-              {
-                //Process response
-                uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
-                uint8_t len = sizeof(buf);
-                // Serial.println(len,DEC);
-                rf95.recv(buf, &len);
-                RH_RF95::printBuffer("Received request response: ", buf, len);
-                if(buf[0]==0x03) //expected instant data response type //0x03
-                {
-                    Serial.println("Processing instat data response...");
-                    uint8_t numberOfNodes=buf[1];
-                    uint8_t index=0;
-                    Serial.println("Searching our time slot...");
-                    uint8_t timeSlotIndex=255;
-                    while((index<numberOfNodes)&&(timeSlotIndex==255))
-                    {
-                      uint32_t parsedId;
-                      parsedId=buf[index+2]+(buf[index+3]*0xF)+(buf[index+4]*0xFF)+(buf[index+5]*0xFFF);
-                      if(parsedId==NODEID)
-                        timeSlotIndex=index/4;
-                      index=index+4; 
-                    }
-                    if(timeSlotIndex!=255)
-                    {
-                      Serial.print("OurTimeSlot:");Serial.println(timeSlotIndex,DEC);
-                      Serial.println("Waiting for my time...");
-                      readGPS();
-                      delay(timeSlotIndex*RADIOTIMESLOT);
-                      //send current GPS record
-                      uint8_t GPSData[RH_RF95_MAX_MESSAGE_LEN];
-                      uint8_t size=writeGPSRecordToString(lastGPSRecord,GPSData);
-                      rf95.send(GPSData,size);
-                      rf95.waitPacketSent();
-                      Serial.println("Instant GPS Data Sent...");
-
-
-
-                      
-                    }
-                    else
-                    {
-                      Serial.print("No time slot for me...");
-                    }
-                }
-            }
-        }
-      }
-      else
-      {
-        Serial.println("Not call for us!");
-      }
+  Serial.print(i,DEC);Serial.print(" :0x");Serial.println(ptr[i],HEX);
   }
 }
-
 
 void readGPS()
 {
