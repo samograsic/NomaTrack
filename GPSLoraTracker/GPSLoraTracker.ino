@@ -2,7 +2,7 @@
 #include <SPI.h>
 #include <RH_RF95.h>
 
-#define NODEID 0x0001
+#define NODEID 0xAABBCCDD
 
 #define RFM95_CS 8
 #define RFM95_RST 4
@@ -18,15 +18,13 @@
 #define INDENTIFY 1
 #define DATA 2
 
-uint_u protocolState=0;
+uint8_t protocolState=0;
+uint32_t currentServerId=0;
+uint32_t nodeId=NODEID;
+unsigned long lastPacketSentTime;
+uint8_t timeSlotIndex;
 
 #define GPSSerial Serial1
-
-/* Feather m0 w/wing
-  #define RFM95_RST     11   // "A"
-  #define RFM95_CS      10   // "B"
-  #define RFM95_INT     6    // "D"
-*/
 
 
 struct GPSRecord
@@ -42,7 +40,6 @@ struct GPSRecord
 };
 
 GPSRecord lastGPSRecord;
-//lastGPSRecord.nodeId=1;
 
 // Change to 434.0 or other frequency, must match RX's freq!
 #define RF95_FREQ 434.0
@@ -61,34 +58,134 @@ Adafruit_GPS GPS(&GPSSerial);
 #define GPSECHO false
 
 uint32_t timer = millis();
-uint8_t writeGPSRecordToString( GPSRecord & value, uint8_t  *str)
-  {
-    uint8_t *p = ( uint8_t*) &value;
-    //const uint8_t *strPtr=
-    unsigned int i;
-    *str=0x04;
-    str++;
-    for (i = 0; i < sizeof value; i++)
-    {      
-      *str = (*p++); 
-      str++; 
+
+
+
+
+uint8_t processPacket()
+{
+      uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
+      uint8_t len = sizeof(buf);
+      rf95.recv(buf, &len);
+      RH_RF95::printBuffer("Received: ", buf, len);
+      Serial.print("RSSI: "); Serial.print(rf95.lastRssi(), DEC); Serial.print(" "); Serial.print(rssiToPercentage(rf95.lastRssi()), DEC); Serial.println("%");
+      lastGPSRecord.RSSI=rf95.lastRssi();
+      switch (buf[0]) {
+        case 0x01:
+        {
+          //Expecting init call
+         //if we are in avaliable we accept server ID
+          if (protocolState==WAIT)
+          {
+              currentServerId=(buf[1] <<  24) | (buf[2] << 16) | (buf[3] << 8) | buf[4];
+              Serial.print("Answering to nodeID:");Serial.println(currentServerId,HEX);
+              protocolState=INDENTIFY;
+          } 
+          return 0x01;          
+        }
+        break;
+        case 0x03:
+        {
+        //Expeciting request for data and timeslot
+          Serial.println("Processing requested data response...");
+          uint8_t numberOfNodes=buf[1];
+          uint8_t index=0;
+          Serial.print("Searching our time slot...");
+          timeSlotIndex=255;
+          while((index<numberOfNodes)&&(timeSlotIndex==255))
+          {
+             uint32_t parsedId=(buf[2] <<  24) | (buf[3] << 16) | (buf[4] << 8) | buf[5];
+         //    parsedId=buf[index+5]+((uint32_t)buf[index+4]*0xFF)+((uint32_t)buf[index+3]*0xFFFF)+(buf[index+2]*0xFFFFFF);
+             Serial.print("Buf+2:");Serial.println(buf[index+2],HEX);
+             Serial.print("Buf+3:");Serial.println(buf[index+3],HEX);
+             Serial.print("Buf+4:");Serial.println(buf[index+4],HEX);
+             Serial.print("Buf+5:");Serial.println(buf[index+5],HEX);
+            Serial.print("ID:");Serial.println(parsedId,HEX);
+             if(parsedId==NODEID)
+                 timeSlotIndex=index/4;
+             index=index+4; 
+          }
+          protocolState=DATA;
+          return 0x03;
+        }
+      break;
+     default:
+       {
+        // if nothing else matches
+       Serial.println("Unknow type of packet received!!!!");
+       return 0xFF;
+       }
+      break;
     }
-    return i+1;
 }
 
-void receivePacket
-{
-  
-  }
-
 //Protocol state machine
-void execProtocol
+void execProtocol()
 {
-  
+    if(rf95.available()==true)
+    {
+      uint8_t packetType=processPacket();
+      if(packetType!=0xFF)
+      switch (protocolState) {
+       case WAIT:
+        //Waiting for the init call, we really do nothing
+       Serial.println("WAIT:  Waiting...");
+      break;
+    case INDENTIFY:
+      //Introduce ourself
+      Serial.println("INDENTIFY: Indetifiying ourself...");
+      //Than we anwser with our id
+      uint8_t data[RH_RF95_MAX_MESSAGE_LEN];
+      data[0]=0x02; 
+      data[1]=nodeId>>24;data[2]=nodeId>>16;data[3]=nodeId>>8;data[4]=nodeId;
+             Serial.print("ID:");Serial.println(nodeId,HEX);
+             Serial.print("DAT0:");Serial.println(data[1],HEX);
+             Serial.print("DAT1:");Serial.println(data[2],HEX);
+             Serial.print("DAT2:");Serial.println(data[3],HEX);
+             Serial.print("DAT3:");Serial.println(data[4],HEX);
+ 
+      //while(rf95.isChannelActive()==true)
+      delay(random(MINDELAY, MAXDELAY));
+      rf95.send(data,5);
+      rf95.waitPacketSent();
+      lastPacketSentTime = millis();
+      Serial.println("Responded to call, waiting for request...");
+      break;
+     case DATA:
+        //Send data in in our time slot -if we got it
+          if(timeSlotIndex!=255)
+          {
+                      Serial.print("OurTimeSlot:");Serial.println(timeSlotIndex,DEC);
+                      Serial.println("Waiting for my time...");
+                      delay(timeSlotIndex*RADIOTIMESLOT);
+                      //send current GPS record
+                      uint8_t GPSData[RH_RF95_MAX_MESSAGE_LEN];
+                      GPSData[0]=0x04;
+                      uint8_t size=writeGPSRecordToString(GPSData);
+                      rf95.send(GPSData,size);
+                      Serial.print("Sent data package with size:"); Serial.println(size,DEC);
+                      printGPSData();
+                          
+          }
+          else
+            Serial.println("No timeslot for us... Going to WAIT");
+          protocolState=WAIT;  
+       break;
+     default:
+       // if nothing else matches, do the default and init protocol
+       protocolState=WAIT;
+      break;
+    }
+    }
 }
 
 void loop()
 {
+  readGPS();
+  execProtocol();
+  
+
+  /*
   while(rf95.available()==false)
   {
     //We wait for a radio call
@@ -96,9 +193,8 @@ void loop()
   }
   //After we check if it a valid radio all
   //LORA Stuff
-  uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
-  uint8_t len = sizeof(buf);
-  if (rf95.recv(buf, &len))
+
+  if ()
   {
       //Debug
       digitalWrite(LED, HIGH);
@@ -181,10 +277,13 @@ void loop()
         Serial.println("Not call for us!");
       }
   }
+  */
 }
  
 void setup()
 {
+  lastGPSRecord.nodeId=NODEID;
+
   //LORA Init
   pinMode(LED, OUTPUT);
   pinMode(RFM95_RST, OUTPUT);
@@ -268,7 +367,7 @@ void readGPS()
   // approximately every 2 seconds or so, print out the current stats
   if (millis() - timer > 2000) {
     timer = millis(); // reset the timer
-    Serial.print("\nTime: ");
+  /*  Serial.print("\nTime: ");
     Serial.print(GPS.hour, DEC); Serial.print(':');
     Serial.print(GPS.minute, DEC); Serial.print(':');
     Serial.print(GPS.seconds, DEC); Serial.print('.');
@@ -288,7 +387,7 @@ void readGPS()
       Serial.print("Angle: "); Serial.println(GPS.angle);
       Serial.print("Altitude: "); Serial.println(GPS.altitude);
       Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
-    }
+    }*/
   //Fill in lastGPSRecord
   lastGPSRecord.hour=GPS.hour;
   lastGPSRecord.minute=GPS.minute;
@@ -303,21 +402,72 @@ void readGPS()
   lastGPSRecord.satellites=GPS.satellites;
   }
 }
-
-
-int rssiToPercentage(float _rssi )
-{
-  if (_rssi <= -100)
+uint8_t writeGPSRecordToString( GPSRecord & value, uint8_t  *str)
   {
-    return 0;
-  }
-  else if (_rssi >= -50)
-  {
-    return 100;
-  }
-  else
-  {
-    return ( 2 * (_rssi + 100));
-  }
-  return 0;
+    uint8_t *p = ( uint8_t*) &value;
+    str=str+1;//we skip first byte
+    uint8_t i;
+    for(uint8_t i = 0; i < sizeof value; i++)
+    {      
+      *str = (*p); 
+      str++; 
+      p++;
+    }
+    return i+1;
 }
+
+uint8_t writeGPSRecordToString(uint8_t  *str)
+  {
+    str[1]=lastGPSRecord.nodeId>>24;str[2]=lastGPSRecord.nodeId>>16;str[3]=lastGPSRecord.nodeId>>8;str[4]=lastGPSRecord.nodeId;
+    str[5]=lastGPSRecord.hour;str[6]=lastGPSRecord.minute;str[7]=lastGPSRecord.seconds;
+    str[8]=lastGPSRecord.year;str[9]=lastGPSRecord.month;str[10]=lastGPSRecord.day;
+    uint32_t temp=lastGPSRecord.latitudeDegrees*100000;
+    str[11]=temp>>24;str[12]=temp>>16;str[13]=temp>>8;str[14]=temp;
+    temp=lastGPSRecord.longitudeDegrees*100000;
+    str[15]=temp>>24;str[16]=temp>>16;str[17]=temp>>8;str[18]=temp;
+    temp=
+
+
+      lastGPSRecord.hour=GPS.hour;
+  lastGPSRecord.minute=GPS.minute;
+  lastGPSRecord.seconds=GPS.seconds;
+  lastGPSRecord.year=GPS.year;
+  lastGPSRecord.month=GPS.month;
+  lastGPSRecord.day=GPS.day;
+  lastGPSRecord.speed=GPS.speed;
+  lastGPSRecord.latitudeDegrees=GPS.lat;
+  lastGPSRecord.longitudeDegrees=GPS.lon;
+  lastGPSRecord.altitude=GPS.altitude;
+  lastGPSRecord.satellites=GPS.satellites;
+    return 60;
+}
+
+data[1]=nodeId>>24;data[2]=nodeId>>16;data[3]=nodeId>>8;data[4]=nodeId;
+
+uint8_t rssiToPercentage(float _rssi )
+{
+  if (_rssi <= -100)  { return 0;} else if (_rssi >= -50) {return 100;}else{return ( 2 * (_rssi + 100)); } return 0;
+}
+
+
+void printGPSData()
+{
+    Serial.print("\nNodeId:");
+    Serial.print(lastGPSRecord.nodeId, HEX); Serial.print(':');
+    Serial.print("\nTime: ");
+    Serial.print(lastGPSRecord.hour, DEC); Serial.print(':');
+    Serial.print(lastGPSRecord.minute, DEC); Serial.print(':');
+    Serial.print(lastGPSRecord.seconds, DEC); Serial.print('.');
+    Serial.print("Date: ");
+    Serial.print(lastGPSRecord.day, DEC); Serial.print('/');
+    Serial.print(lastGPSRecord.month, DEC); Serial.print("/20");
+    Serial.println(lastGPSRecord.year, DEC);
+    Serial.print("Location: ");
+    Serial.print(lastGPSRecord.latitudeDegrees, 4);
+    Serial.print(", ");
+    Serial.print(lastGPSRecord.longitudeDegrees, 4); 
+    Serial.print("Speed (knots): "); Serial.println(lastGPSRecord.speed);
+    Serial.print("Altitude: "); Serial.println(lastGPSRecord.altitude);
+    Serial.print("Satellites: "); Serial.println((int)lastGPSRecord.satellites);
+}
+

@@ -44,6 +44,44 @@ struct GPSRecord
   float RSSI;
 };
 
+GPSRecord lastGPSRecord;
+
+
+uint8_t writeStringToGPSRecord(uint8_t  *str,GPSRecord & value)
+  {
+    uint8_t *p = ( uint8_t*) &value;
+    str=str+1;//we skip first byte
+    uint8_t i;
+    for (uint8_t i = 0; i < sizeof value; i++)
+    {      
+      *p = (*str); 
+      str++;
+      p++; 
+    }
+    return i+1;
+}
+
+void printGPSData()
+{
+    Serial.print("\nNodeId:");
+    Serial.print(lastGPSRecord.nodeId, HEX); Serial.print(':');
+    Serial.print("\nTime: ");
+    Serial.print(lastGPSRecord.hour, DEC); Serial.print(':');
+    Serial.print(lastGPSRecord.minute, DEC); Serial.print(':');
+    Serial.print(lastGPSRecord.seconds, DEC); Serial.print('.');
+    Serial.print("Date: ");
+    Serial.print(lastGPSRecord.day, DEC); Serial.print('/');
+    Serial.print(lastGPSRecord.month, DEC); Serial.print("/20");
+    Serial.println(lastGPSRecord.year, DEC);
+    Serial.print("Location: ");
+    Serial.print(lastGPSRecord.latitudeDegrees, 4);
+    Serial.print(", ");
+    Serial.print(lastGPSRecord.longitudeDegrees, 4); 
+    Serial.print("Speed (knots): "); Serial.println(lastGPSRecord.speed);
+    Serial.print("Altitude: "); Serial.println(lastGPSRecord.altitude);
+    Serial.print("Satellites: "); Serial.println((int)lastGPSRecord.satellites);
+}
+
 void loop() 
 {
   uint16_t numberOfNodes = 0;
@@ -71,8 +109,9 @@ void loop()
       if(buf[0]==0x02) //expected response type //0x02
       {
         Serial.println("Processing response...");
-        nodeData[numberOfNodes].nodeId=buf[4]+(buf[3]*0xFF)+(buf[2]*0xFFFF)+(buf[1]*0xFFFFFF);
-        Serial.print("Added node ID:");Serial.println(nodeData[numberOfNodes].nodeId,DEC);
+        nodeData[numberOfNodes].nodeId = (buf[1] <<  24) | (buf[2] << 16) | (buf[3] << 8) | buf[4];
+        //nodeData[numberOfNodes].nodeId=buf[1]+(buf[2]*0xFF)+(buf[3]*0xFFFF)+(buf[4]*0xFFFFFF);
+        Serial.print("Added node ID:");Serial.println(nodeData[numberOfNodes].nodeId,HEX);
         numberOfNodes++;
       }
       else
@@ -87,18 +126,18 @@ void loop()
      Serial.println("Makin request list of nodes..");
      //Send request to nodes for instant data
      uint8_t instantRequest[RH_RF95_MAX_MESSAGE_LEN];
-     instantRequest[0]=0x03;//0x03 Instant Request Type 
+     instantRequest[0]=0x03;//0x03 Instant Data Request Type 
      instantRequest[1]=numberOfNodes;
      uint8_t index=0;
      while(index<numberOfNodes)
-     {
-      instantRequest[index+2]=(uint8_t)(nodeData[index].nodeId)%0xFFF;
-      instantRequest[index+3]=(uint8_t)(nodeData[index].nodeId/0xFFF)%0xFF;
-      instantRequest[index+4]=(uint8_t)(nodeData[index].nodeId/0xFF)%0xF;
-      instantRequest[index+5]=(uint8_t)(nodeData[index].nodeId/0xF);
+     {         
+      instantRequest[index+2]=nodeData[index].nodeId>> 24;
+      instantRequest[index+3]=nodeData[index].nodeId>> 16;
+      instantRequest[index+4]=nodeData[index].nodeId>> 8;
+      instantRequest[index+5]=nodeData[index].nodeId;
       index=index+4;
      }
-     rf95.send((uint8_t *)instantRequest,index+1);
+     rf95.send((uint8_t *)instantRequest,(index*4)+2);
      yield();
      rf95.waitPacketSent();
      startTime = millis();
@@ -111,7 +150,11 @@ void loop()
           uint8_t len = sizeof(buf);
           rf95.recv(buf, &len);
           RH_RF95::printBuffer("Received data: ", buf, len);
-          Serial.println("Received GPS data!!!");
+          
+          writeStringToGPSRecord(buf,lastGPSRecord);
+            Serial.println("Received GPS data!!!");
+          printGPSData();
+          
           startTime = millis();
         }
         yield();
