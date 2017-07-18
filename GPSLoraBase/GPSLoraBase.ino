@@ -36,33 +36,38 @@ struct GPSRecord
 {
   uint32_t nodeId;
   uint8_t hour, minute, seconds, year, month, day;
-  float speed;
   float latitudeDegrees, longitudeDegrees;
   float altitude;
-  float temperature;
+  float speed;
   uint8_t satellites;
-  float RSSI;
+  uint8_t RSSI;
+  uint8_t battery;
+  int8_t temperature;
 };
+
 
 GPSRecord lastGPSRecord;
 
 
-uint8_t writeStringToGPSRecord(uint8_t  *str,GPSRecord & value)
+uint8_t writeStringToGPSRecord(uint8_t  *str)
   {
-    uint8_t *p = ( uint8_t*) &value;
-    str=str+1;//we skip first byte
-    uint8_t i;
-    for (uint8_t i = 0; i < sizeof value; i++)
-    {      
-      *p = (*str); 
-      str++;
-      p++; 
-    }
-    return i+1;
+    lastGPSRecord.nodeId = (str[1] <<  24) | (str[2] << 16) | (str[3] << 8) | str[4];
+    lastGPSRecord.hour=str[5];lastGPSRecord.minute=str[6];lastGPSRecord.seconds=str[7];
+    lastGPSRecord.year=str[8];lastGPSRecord.month=str[9];lastGPSRecord.day=str[10];
+    lastGPSRecord.latitudeDegrees = ((str[11] <<  24) | (str[12] << 16) | (str[13] << 8) | str[14] )/100000.0;
+    lastGPSRecord.longitudeDegrees = ((str[15] <<  24) | (str[16] << 16) | (str[17] << 8) | str[18] )/100000.0;
+    lastGPSRecord.altitude=((str[19] << 8) | str[20] )/10.0;
+    lastGPSRecord.speed=((str[21] << 8) | str[22] )/100.0;
+    lastGPSRecord.satellites=str[23];
+    lastGPSRecord.RSSI=str[24];
+    lastGPSRecord.battery=str[25];
+    return 26;
+
 }
 
 void printGPSData()
 {
+    Serial.print("\nGPS RECORD DATA:");
     Serial.print("\nNodeId:");
     Serial.print(lastGPSRecord.nodeId, HEX); Serial.print(':');
     Serial.print("\nTime: ");
@@ -77,9 +82,12 @@ void printGPSData()
     Serial.print(lastGPSRecord.latitudeDegrees, 4);
     Serial.print(", ");
     Serial.print(lastGPSRecord.longitudeDegrees, 4); 
-    Serial.print("Speed (knots): "); Serial.println(lastGPSRecord.speed);
+    Serial.print("\nSpeed(km/h): "); Serial.println(lastGPSRecord.speed);
     Serial.print("Altitude: "); Serial.println(lastGPSRecord.altitude);
     Serial.print("Satellites: "); Serial.println((int)lastGPSRecord.satellites);
+    Serial.print("RSSI(%): "); Serial.println(lastGPSRecord.RSSI);
+    Serial.print("Battery(%): "); Serial.println(lastGPSRecord.battery);
+    Serial.print("Temperature(C): "); Serial.println(lastGPSRecord.temperature);
 }
 
 void loop() 
@@ -110,7 +118,6 @@ void loop()
       {
         Serial.println("Processing response...");
         nodeData[numberOfNodes].nodeId = (buf[1] <<  24) | (buf[2] << 16) | (buf[3] << 8) | buf[4];
-        //nodeData[numberOfNodes].nodeId=buf[1]+(buf[2]*0xFF)+(buf[3]*0xFFFF)+(buf[4]*0xFFFFFF);
         Serial.print("Added node ID:");Serial.println(nodeData[numberOfNodes].nodeId,HEX);
         numberOfNodes++;
       }
@@ -151,7 +158,7 @@ void loop()
           rf95.recv(buf, &len);
           RH_RF95::printBuffer("Received data: ", buf, len);
           
-          writeStringToGPSRecord(buf,lastGPSRecord);
+          writeStringToGPSRecord(buf);
             Serial.println("Received GPS data!!!");
           printGPSData();
           

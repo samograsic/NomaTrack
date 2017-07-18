@@ -31,12 +31,13 @@ struct GPSRecord
 {
   uint32_t nodeId;
   uint8_t hour, minute, seconds, year, month, day;
-  float speed;
   float latitudeDegrees, longitudeDegrees;
   float altitude;
-  float temperature;
+  float speed;
   uint8_t satellites;
-  float RSSI;
+  uint8_t RSSI;
+  uint8_t battery;
+  int8_t temperature;
 };
 
 GPSRecord lastGPSRecord;
@@ -69,7 +70,7 @@ uint8_t processPacket()
       rf95.recv(buf, &len);
       RH_RF95::printBuffer("Received: ", buf, len);
       Serial.print("RSSI: "); Serial.print(rf95.lastRssi(), DEC); Serial.print(" "); Serial.print(rssiToPercentage(rf95.lastRssi()), DEC); Serial.println("%");
-      lastGPSRecord.RSSI=rf95.lastRssi();
+      lastGPSRecord.RSSI=rssiToPercentage(rf95.lastRssi());
       switch (buf[0]) {
         case 0x01:
         {
@@ -96,11 +97,11 @@ uint8_t processPacket()
           {
              uint32_t parsedId=(buf[2] <<  24) | (buf[3] << 16) | (buf[4] << 8) | buf[5];
          //    parsedId=buf[index+5]+((uint32_t)buf[index+4]*0xFF)+((uint32_t)buf[index+3]*0xFFFF)+(buf[index+2]*0xFFFFFF);
-             Serial.print("Buf+2:");Serial.println(buf[index+2],HEX);
+         /*    Serial.print("Buf+2:");Serial.println(buf[index+2],HEX);
              Serial.print("Buf+3:");Serial.println(buf[index+3],HEX);
              Serial.print("Buf+4:");Serial.println(buf[index+4],HEX);
              Serial.print("Buf+5:");Serial.println(buf[index+5],HEX);
-            Serial.print("ID:");Serial.println(parsedId,HEX);
+            Serial.print("ID:");Serial.println(parsedId,HEX);*/
              if(parsedId==NODEID)
                  timeSlotIndex=index/4;
              index=index+4; 
@@ -395,54 +396,34 @@ void readGPS()
   lastGPSRecord.year=GPS.year;
   lastGPSRecord.month=GPS.month;
   lastGPSRecord.day=GPS.day;
-  lastGPSRecord.speed=GPS.speed;
+  lastGPSRecord.speed=GPS.speed*1.852; //coversion from knots to KM/h
   lastGPSRecord.latitudeDegrees=GPS.lat;
   lastGPSRecord.longitudeDegrees=GPS.lon;
   lastGPSRecord.altitude=GPS.altitude;
   lastGPSRecord.satellites=GPS.satellites;
   }
 }
-uint8_t writeGPSRecordToString( GPSRecord & value, uint8_t  *str)
-  {
-    uint8_t *p = ( uint8_t*) &value;
-    str=str+1;//we skip first byte
-    uint8_t i;
-    for(uint8_t i = 0; i < sizeof value; i++)
-    {      
-      *str = (*p); 
-      str++; 
-      p++;
-    }
-    return i+1;
-}
+
 
 uint8_t writeGPSRecordToString(uint8_t  *str)
   {
     str[1]=lastGPSRecord.nodeId>>24;str[2]=lastGPSRecord.nodeId>>16;str[3]=lastGPSRecord.nodeId>>8;str[4]=lastGPSRecord.nodeId;
     str[5]=lastGPSRecord.hour;str[6]=lastGPSRecord.minute;str[7]=lastGPSRecord.seconds;
     str[8]=lastGPSRecord.year;str[9]=lastGPSRecord.month;str[10]=lastGPSRecord.day;
-    uint32_t temp=lastGPSRecord.latitudeDegrees*100000;
+    int32_t temp=lastGPSRecord.latitudeDegrees*100000;
     str[11]=temp>>24;str[12]=temp>>16;str[13]=temp>>8;str[14]=temp;
     temp=lastGPSRecord.longitudeDegrees*100000;
     str[15]=temp>>24;str[16]=temp>>16;str[17]=temp>>8;str[18]=temp;
-    temp=
-
-
-      lastGPSRecord.hour=GPS.hour;
-  lastGPSRecord.minute=GPS.minute;
-  lastGPSRecord.seconds=GPS.seconds;
-  lastGPSRecord.year=GPS.year;
-  lastGPSRecord.month=GPS.month;
-  lastGPSRecord.day=GPS.day;
-  lastGPSRecord.speed=GPS.speed;
-  lastGPSRecord.latitudeDegrees=GPS.lat;
-  lastGPSRecord.longitudeDegrees=GPS.lon;
-  lastGPSRecord.altitude=GPS.altitude;
-  lastGPSRecord.satellites=GPS.satellites;
-    return 60;
+    int16_t temp2=lastGPSRecord.altitude*10;
+    str[19]=temp2>>8;str[20]=temp2;
+    temp2=lastGPSRecord.speed*100;
+    str[21]=temp2>>8;str[22]=temp2;
+    str[23]=lastGPSRecord.satellites;
+    str[24]=lastGPSRecord.RSSI;
+    str[25]=lastGPSRecord.battery;
+    return 26;
 }
 
-data[1]=nodeId>>24;data[2]=nodeId>>16;data[3]=nodeId>>8;data[4]=nodeId;
 
 uint8_t rssiToPercentage(float _rssi )
 {
@@ -452,6 +433,7 @@ uint8_t rssiToPercentage(float _rssi )
 
 void printGPSData()
 {
+    Serial.print("\nGPS RECORD DATA:");
     Serial.print("\nNodeId:");
     Serial.print(lastGPSRecord.nodeId, HEX); Serial.print(':');
     Serial.print("\nTime: ");
@@ -466,8 +448,11 @@ void printGPSData()
     Serial.print(lastGPSRecord.latitudeDegrees, 4);
     Serial.print(", ");
     Serial.print(lastGPSRecord.longitudeDegrees, 4); 
-    Serial.print("Speed (knots): "); Serial.println(lastGPSRecord.speed);
+    Serial.print("\nSpeed(km/h): "); Serial.println(lastGPSRecord.speed);
     Serial.print("Altitude: "); Serial.println(lastGPSRecord.altitude);
     Serial.print("Satellites: "); Serial.println((int)lastGPSRecord.satellites);
+    Serial.print("RSSI(%): "); Serial.println(lastGPSRecord.RSSI);
+    Serial.print("Battery(%): "); Serial.println(lastGPSRecord.battery);
+    Serial.print("Temperature(C): "); Serial.println(lastGPSRecord.temperature);
 }
 
