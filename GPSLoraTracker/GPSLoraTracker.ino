@@ -1,6 +1,9 @@
+#include <Adafruit_SleepyDog.h>
+
 #include <Adafruit_GPS.h>
 #include <SPI.h>
 #include <RH_RF95.h>
+#include <math.h>
 
 #define NODEID 0xAABBCCDD
 
@@ -17,6 +20,9 @@
 #define WAIT 0
 #define INDENTIFY 1
 #define DATA 2
+  
+  
+#define VBATPIN A7
 
 uint8_t protocolState=0;
 uint32_t currentServerId=0;
@@ -36,7 +42,7 @@ struct GPSRecord
   float speed;
   uint8_t satellites;
   uint8_t RSSI;
-  uint8_t battery;
+  float battery;
   int8_t temperature;
 };
 
@@ -397,10 +403,18 @@ void readGPS()
   lastGPSRecord.month=GPS.month;
   lastGPSRecord.day=GPS.day;
   lastGPSRecord.speed=GPS.speed*1.852; //coversion from knots to KM/h
-  lastGPSRecord.latitudeDegrees=GPS.lat;
-  lastGPSRecord.longitudeDegrees=GPS.lon;
+  lastGPSRecord.latitudeDegrees=convertDegMinToDecDeg(GPS.latitude);
+  lastGPSRecord.longitudeDegrees=convertDegMinToDecDeg(GPS.longitude);
   lastGPSRecord.altitude=GPS.altitude;
   lastGPSRecord.satellites=GPS.satellites;
+
+   float measuredvbat = analogRead(VBATPIN);
+    measuredvbat *= 2;    // we divided by 2, so multiply back
+    measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
+    measuredvbat /= 1024; // convert to voltage
+   //lastGPSRecord.battery=((measuredvbat-3)/0.7)*100;
+    lastGPSRecord.battery=measuredvbat;//-3)/0.7)*100;
+
   }
 }
 
@@ -420,10 +434,24 @@ uint8_t writeGPSRecordToString(uint8_t  *str)
     str[21]=temp2>>8;str[22]=temp2;
     str[23]=lastGPSRecord.satellites;
     str[24]=lastGPSRecord.RSSI;
-    str[25]=lastGPSRecord.battery;
+    str[25]=lastGPSRecord.battery*10;
     return 26;
 }
-
+// converts lat/long from Adafruit
+// degree-minute format to decimal-degrees
+double convertDegMinToDecDeg (float degMin) {
+  double min = 0.0;
+  double decDeg = 0.0;
+ 
+  //get the minutes, fmod() requires double
+  min = fmod((double)degMin, 100.0);
+ 
+  //rebuild coordinates in decimal degrees
+  degMin = (int) ( degMin / 100 );
+  decDeg = degMin + ( min / 60 );
+ 
+  return decDeg;
+}
 
 uint8_t rssiToPercentage(float _rssi )
 {

@@ -4,6 +4,7 @@
     #include <RH_RF95.h>
     #include <ESP8266WiFi.h>
     #include <ThingerWifi.h>
+    //#include <stdlib.h>
 
 
     #define RFM95_CS  2    // "E"
@@ -41,8 +42,8 @@ struct GPSRecord
   float speed;
   uint8_t satellites;
   uint8_t RSSI;
-  uint8_t battery;
-  int8_t temperature;
+  float battery;
+  float temperature;
 };
 
 
@@ -54,13 +55,13 @@ uint8_t writeStringToGPSRecord(uint8_t  *str)
     lastGPSRecord.nodeId = (str[1] <<  24) | (str[2] << 16) | (str[3] << 8) | str[4];
     lastGPSRecord.hour=str[5];lastGPSRecord.minute=str[6];lastGPSRecord.seconds=str[7];
     lastGPSRecord.year=str[8];lastGPSRecord.month=str[9];lastGPSRecord.day=str[10];
-    lastGPSRecord.latitudeDegrees = ((str[11] <<  24) | (str[12] << 16) | (str[13] << 8) | str[14] )/100000.0;
-    lastGPSRecord.longitudeDegrees = ((str[15] <<  24) | (str[16] << 16) | (str[17] << 8) | str[18] )/100000.0;
+    lastGPSRecord.latitudeDegrees = (float)((str[11] <<  24) | (str[12] << 16) | (str[13] << 8) | str[14] )/100000.0;
+    lastGPSRecord.longitudeDegrees = (float)((str[15] <<  24) | (str[16] << 16) | (str[17] << 8) | str[18] )/100000.0;
     lastGPSRecord.altitude=((str[19] << 8) | str[20] )/10.0;
     lastGPSRecord.speed=((str[21] << 8) | str[22] )/100.0;
     lastGPSRecord.satellites=str[23];
     lastGPSRecord.RSSI=str[24];
-    lastGPSRecord.battery=str[25];
+    lastGPSRecord.battery=(float)str[25]/10.0;
     return 26;
 
 }
@@ -90,8 +91,14 @@ void printGPSData()
     Serial.print("Temperature(C): "); Serial.println(lastGPSRecord.temperature);
 }
 
+void initThinger()
+{
+
+}
+
 void loop() 
 {
+  thing.handle();
   uint16_t numberOfNodes = 0;
   NodeData nodeData[MAXNROFNODES];
   Serial.println("Preparing to call Nodes..."); // Send a message to rf95_server
@@ -103,6 +110,8 @@ void loop()
   rf95.waitPacketSent();
   unsigned long startTime = millis();
   Serial.println("Sending call, waiting for clients...");
+  
+  thing.handle();
   while(((numberOfNodes<MAXNROFNODES)&&((millis()-startTime)<CALLTIMEOUT)))
   {
     if(rf95.available()==true)
@@ -114,6 +123,8 @@ void loop()
       rf95.recv(buf, &len);
       RH_RF95::printBuffer("Received: ", buf, len);
       Serial.println("Received response...");
+      
+      thing.handle();
       if(buf[0]==0x02) //expected response type //0x02
       {
         Serial.println("Processing response...");
@@ -124,12 +135,16 @@ void loop()
       else
       {
         Serial.println("Wrong response!");
-      }     
+      }
+      thing.handle();     
     }
     yield();
+    thing.handle();
    }
    if(numberOfNodes>0)
    {
+     
+  thing.handle();
      Serial.println("Makin request list of nodes..");
      //Send request to nodes for instant data
      uint8_t instantRequest[RH_RF95_MAX_MESSAGE_LEN];
@@ -147,7 +162,10 @@ void loop()
      rf95.send((uint8_t *)instantRequest,(index*4)+2);
      yield();
      rf95.waitPacketSent();
-     startTime = millis();
+     
+     
+  thing.handle();
+  startTime = millis();
      Serial.println("Request to nodes sent, waiting for data...");
      while(((millis()-startTime)<CALLTIMEOUT))
      {
@@ -158,10 +176,21 @@ void loop()
           rf95.recv(buf, &len);
           RH_RF95::printBuffer("Received data: ", buf, len);
           
-          writeStringToGPSRecord(buf);
-            Serial.println("Received GPS data!!!");
-          printGPSData();
           
+  thing.handle();
+  writeStringToGPSRecord(buf);
+  
+          Serial.println("Received GPS data!!!");
+          printGPSData();
+         
+         //MQTT Stuff
+         Serial.println("Handling THING.IO..."); // Send a message to rf95_server
+       // char nodeName[8];
+       // sprintf(nodeName,"%08lX",lastGPSRecord.nodeId);
+        thing.handle();
+        thing.stream(thing["GPSData"]);
+        thing.handle();
+        
           startTime = millis();
         }
         yield();
@@ -176,32 +205,12 @@ void loop()
 
         //  delay(5000);
 
-/*  //MQTT Stuff
-  Serial.println("Handling THING.IO..."); // Send a message to rf95_server
-  thing.handle();
-  yield();
 
 
-      delay(5000);
-      ++value;
 
-  
-  char radiopacket[20] = "Hello World #      ";
-  itoa(packetnum++, radiopacket+13, 10);
-  Serial.print("Sending "); Serial.println(radiopacket);
-  radiopacket[19] = 0;
-  
-  Serial.println("LORA Sending..."); delay(10);
-  rf95.send((uint8_t *)radiopacket, 20);
- 
-  Serial.println("LORA Waiting for packet to complete..."); delay(10);
-  rf95.waitPacketSent();
-int out;
-thing["LORA-MSG"] >> [](pson& out){
-      out = 100;
-};
-*/
 }
+
+
 
 void setup() 
 {
@@ -238,6 +247,21 @@ void setup()
       rf95.setTxPower(23, false);
      
       // We start by connecting to a WiFi network
-      thing.add_wifi(SSID, SSID_PASSWORD);
-    
+     Serial.println("Init THINGER.IO...");
+
+  thing.add_wifi(SSID, SSID_PASSWORD);
+
+        thing["GPSData"] >> [](pson& out){
+        out["id"] = lastGPSRecord.nodeId;
+        out["lat"] = lastGPSRecord.latitudeDegrees;
+        out["lon"] = lastGPSRecord.longitudeDegrees;
+        out["speed"] = lastGPSRecord.speed;
+        out["altitude"] = lastGPSRecord.altitude;        
+        out["satellites"] = lastGPSRecord.satellites;
+        out["RSSI"] = lastGPSRecord.RSSI;        
+        out["battery"] = lastGPSRecord.battery;
+        out["temperature"] = lastGPSRecord.temperature;
+        };  
+
+         
 }
