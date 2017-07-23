@@ -1,18 +1,18 @@
-#include <Adafruit_SleepyDog.h>
+//#include <Adafruit_SleepyDog.h>
 
 #include <Adafruit_GPS.h>
 #include <SPI.h>
 #include <RH_RF95.h>
 #include <math.h>
 
-#define NODEID 0xAABBCCDD
+#define NODEID 0xAAAAAAA2
 
 #define RFM95_CS 8
 #define RFM95_RST 4
 #define RFM95_INT 3
 
-#define MINDELAY 100
-#define MAXDELAY 1000
+#define MINDELAY 1000
+#define MAXDELAY 2000
 #define RESPONSETIMEOUT 10000
 #define RADIOTIMESLOT 2000
 
@@ -49,7 +49,8 @@ struct GPSRecord
 GPSRecord lastGPSRecord;
 
 // Change to 434.0 or other frequency, must match RX's freq!
-#define RF95_FREQ 434.0
+//#define RF95_FREQ 434.0
+#define RF95_FREQ 868.0
 
 // Singleton instance of the radio driver
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
@@ -87,7 +88,9 @@ uint8_t processPacket()
               currentServerId=(buf[1] <<  24) | (buf[2] << 16) | (buf[3] << 8) | buf[4];
               Serial.print("Answering to nodeID:");Serial.println(currentServerId,HEX);
               protocolState=INDENTIFY;
-          } 
+          }
+          else
+              Serial.print("Received 0x01, but we are in other state!");
           return 0x01;          
         }
         break;
@@ -129,6 +132,7 @@ uint8_t processPacket()
 //Protocol state machine
 void execProtocol()
 {
+  //Serial.println("Protocoling...");
     if(rf95.available()==true)
     {
       uint8_t packetType=processPacket();
@@ -145,16 +149,11 @@ void execProtocol()
       uint8_t data[RH_RF95_MAX_MESSAGE_LEN];
       data[0]=0x02; 
       data[1]=nodeId>>24;data[2]=nodeId>>16;data[3]=nodeId>>8;data[4]=nodeId;
-             Serial.print("ID:");Serial.println(nodeId,HEX);
-             Serial.print("DAT0:");Serial.println(data[1],HEX);
-             Serial.print("DAT1:");Serial.println(data[2],HEX);
-             Serial.print("DAT2:");Serial.println(data[3],HEX);
-             Serial.print("DAT3:");Serial.println(data[4],HEX);
- 
-      //while(rf95.isChannelActive()==true)
+       //while(rf95.isChannelActive()==true)
       delay(random(MINDELAY, MAXDELAY));
       rf95.send(data,5);
       rf95.waitPacketSent();
+      delay(100);
       lastPacketSentTime = millis();
       Serial.println("Responded to call, waiting for request...");
       break;
@@ -164,12 +163,13 @@ void execProtocol()
           {
                       Serial.print("OurTimeSlot:");Serial.println(timeSlotIndex,DEC);
                       Serial.println("Waiting for my time...");
-                      delay(timeSlotIndex*RADIOTIMESLOT);
+                      delay(500); delay(timeSlotIndex*RADIOTIMESLOT);
                       //send current GPS record
                       uint8_t GPSData[RH_RF95_MAX_MESSAGE_LEN];
                       GPSData[0]=0x04;
                       uint8_t size=writeGPSRecordToString(GPSData);
                       rf95.send(GPSData,size);
+                      rf95.waitPacketSent();                      
                       Serial.print("Sent data package with size:"); Serial.println(size,DEC);
                       printGPSData();
                           
@@ -286,19 +286,16 @@ void loop()
   }
   */
 }
- 
-void setup()
-{
-  lastGPSRecord.nodeId=NODEID;
 
+
+void initLora()
+{
+ 
   //LORA Init
   pinMode(LED, OUTPUT);
   pinMode(RFM95_RST, OUTPUT);
   digitalWrite(RFM95_RST, HIGH);
-  while (!Serial);
-  Serial.begin(115200);
-  delay(100);
-  Serial.println("Feather LoRa RX Test!");
+   Serial.println("Feather LoRa RX Test!");
   // manual reset
   digitalWrite(RFM95_RST, LOW);
   delay(10);
@@ -315,11 +312,24 @@ void setup()
     while (1);
   }
   Serial.print("Set Freq to: "); Serial.println(RF95_FREQ);
-  // Defaults after init are 434.0MHz, 13dBm, Bw = 125 kHz, Cr = 4/5, Sf = 128chips/symbol, CRC on
-  // The default transmitter power is 13dBm, using PA_BOOST.
-  // If you are using RFM95/96/97/98 modules which uses the PA_BOOST transmitter pin, then
-  // you can set transmitter powers from 5 to 23 dBm:
-  rf95.setTxPower(23, false);
+
+//rf95.setTxPower(23); // use PA_BOOST transmitter pin
+
+rf95.setTxPower(23, false); // use PA_RFO pin transmitter pin
+//rf95.setModemConfig(RH_RF95::Bw125Cr48Sf4096 );
+//rf95.setModemConfig(RH_RF95::Bw500Cr45Sf128);
+
+//rf95.printRegisters();
+}
+ 
+void setup()
+{
+  delay(100);
+  Serial.begin(115200);
+  delay(500);
+
+  lastGPSRecord.nodeId=NODEID;
+  initLora();
 
   //GPS Init
   // 9600 NMEA is the default baud rate for Adafruit MTK GPS's- some use 4800
